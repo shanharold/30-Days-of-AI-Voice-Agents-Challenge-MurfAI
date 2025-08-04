@@ -1,26 +1,43 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from murf import Murf
 
-load_dotenv()  # Loads .env file
+load_dotenv()
 
 app = FastAPI()
 
+# Serve static files at /static
+app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+
+@app.get("/")
+def main():
+    return FileResponse("static/index.html")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 class TTSRequest(BaseModel):
     text: str
-    voice_id: str
-    style: str = None  # Optional style field
+    voice_id: str = "en-US-natalie"
+    style: str = "Promo"
 
 api_key = os.getenv("MURF_API_KEY")
 print("Loaded API key:", api_key)
 
 @app.post("/api/tts")
-def generate_tts(request: TTSRequest):
+async def generate_tts(request: TTSRequest):
     try:
         client = Murf(api_key=api_key)
-        # Add style if provided
         params = {
             "text": request.text,
             "voice_id": request.voice_id,
@@ -30,7 +47,6 @@ def generate_tts(request: TTSRequest):
         }
         if request.style:
             params["style"] = request.style
-
         res = client.text_to_speech.generate(**params)
         return {
             "success": True,
@@ -39,35 +55,7 @@ def generate_tts(request: TTSRequest):
             "error": None
         }
     except Exception as e:
-        return {
-            "success": False,
-            "audio_url": None,
-            "message": "Text-to-speech Conversion failed!",
-            "error": str(e)
-        }
-
-@app.get("/api/tts/test")
-def generate_test_tts():
-    text = "This is day 2 of the 30 day build your own voice agent challenge"
-    voice_id = "en-US-natalie"
-    style = "Promo"
-    try:
-        client = Murf(api_key=api_key)
-        res = client.text_to_speech.generate(
-            text=text,
-            voice_id=voice_id,
-            format="MP3",
-            channel_type="STEREO",
-            sample_rate=44100,
-            style=style  # If API supports style parameter
-        )
-        return {
-            "success": True,
-            "audio_url": res.audio_file,
-            "message": "Text-to-speech Conversion successful!",
-            "error": None
-        }
-    except Exception as e:
+        print("Error in /api/tts:", e)  # DEBUG
         return {
             "success": False,
             "audio_url": None,

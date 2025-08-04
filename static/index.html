@@ -2,167 +2,31 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Voice Agent Day 1</title>
-    <style>
-        body {
-            background: radial-gradient(circle at 50% 20%, #232f47 0%, #0a0f19 100%);
-            height: 100vh;
-            margin: 0;
-            font-family: 'Orbitron', 'Segoe UI', Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-        }
-        h1 {
-            color: #00fff7;
-            text-shadow: 0 0 10px #00fff7, 0 0 25px #0ff;
-            font-size: 2.3rem;
-            margin-bottom: 32px;
-            letter-spacing: 2px;
-        }
-        #avatar-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        #avatar {
-            width: 320px;
-            height: 320px;
-            background: linear-gradient(145deg, #2a3751 70%, #444c65 100%);
-            border-radius: 50%;
-            box-shadow: 0 0 60px 10px #00fff7 inset, 0 0 30px #0ff;
-            position: relative;
-            border: 4px solid #00fff7;
-            margin-bottom: 28px;
-            transition: box-shadow 0.2s;
-        }
-        .eye {
-            width: 65px;
-            height: 65px;
-            background: linear-gradient(120deg, #3a4d6a 70%, #2c3650 100%);
-            border-radius: 50%;
-            position: absolute;
-            top: 90px;
-            box-shadow: 0px 0px 15px 5px #00fff7cc;
-            border: 2px solid #00fff7;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .eye.left { left: 68px; }
-        .eye.right { right: 68px; }
-
-        .pupil {
-            width: 30px;
-            height: 30px;
-            background: radial-gradient(circle at 60% 40%, #00fff7 75%, #2196f3 100%);
-            border-radius: 50%;
-            position: absolute;
-            top: 17px;
-            left: 17px;
-            box-shadow: 0 0 20px #00fff7;
-            border: 2px solid #0ff;
-            transition: top 0.1s, left 0.1s;
-        }
-        .mouth {
-            width: 110px;
-            height: 44px;
-            border-radius: 0 0 70px 70px;
-            background: linear-gradient(90deg, #00fff7 10%, #2196f3 90%);
-            position: absolute;
-            bottom: 56px;
-            left: 105px;
-            box-shadow: 0 0 12px #00fff7;
-            border-bottom: 3px solid #0ff;
-            opacity: 0.95;
-        }
-        .chin {
-            width: 80px;
-            height: 20px;
-            background: linear-gradient(90deg, #0ff 10%, #232f47 100%);
-            position: absolute;
-            bottom: 28px;
-            left: 120px;
-            border-radius: 0 0 50px 50px;
-            opacity: 0.6;
-        }
-        .antenna {
-            width: 8px;
-            height: 68px;
-            background: linear-gradient(180deg, #00fff7 60%, #2196f3 100%);
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
-            top: -50px;
-            border-radius: 8px;
-            box-shadow: 0 0 20px #0ff;
-        }
-        .antenna-tip {
-            width: 18px;
-            height: 18px;
-            background: radial-gradient(circle at 40% 40%, #00fff7 70%, #2196f3 100%);
-            border-radius: 50%;
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
-            top: -66px;
-            box-shadow: 0 0 20px #00fff7;
-            border: 2px solid #0ff;
-        }
-        #user-input {
-            margin-top: 25px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        #input-box {
-            padding: 12px 18px;
-            border: 2px solid #00fff7;
-            border-radius: 12px;
-            background: #1d2335;
-            color: #00fff7;
-            font-size: 1.15rem;
-            outline: none;
-            width: 320px;
-            box-shadow: 0 0 12px #00fff733;
-            transition: border 0.2s;
-        }
-        #input-box:focus {
-            border: 2.5px solid #0ff;
-        }
-        /* Optional: Add glowing animation */
-        @keyframes glow {
-            0% { box-shadow: 0 0 30px #00fff7; }
-            50% { box-shadow: 0 0 60px #0ff; }
-            100% { box-shadow: 0 0 30px #00fff7; }
-        }
-        #avatar {
-            animation: glow 2s infinite;
-        }
-    </style>
-    <!-- Orbitron is a free futuristic font from Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+    <title>Voice Agent - Day 3</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <h1>Welcome to my Voice Agent</h1>
-    <div id="avatar-container">
-        <div id="avatar">
-            <div class="antenna"></div>
-            <div class="antenna-tip"></div>
-            <div class="eye left">
-                <div class="pupil" id="pupil-left"></div>
-            </div>
-            <div class="eye right">
-                <div class="pupil" id="pupil-right"></div>
-            </div>
+    <div id="robot-face">
+        <div class="antenna"></div>
+        <div class="antenna-tip"></div>
+        <div class="face">
+            <div class="eye left"><div class="pupil" id="pupil-left"></div></div>
+            <div class="eye right"><div class="pupil" id="pupil-right"></div></div>
             <div class="mouth"></div>
             <div class="chin"></div>
         </div>
-        <div id="user-input">
-            <input type="text" id="input-box" placeholder="Type your message here..." />
-        </div>
     </div>
-    <script src="script.js"></script>
+    <div class="center-card">
+        <h1>Voice Agent <span>Day 3</span></h1>
+        <p class="subtitle">Convert your text to realistic speech with Murf AI</p>
+        <input type="text" id="input-box" placeholder="Type your message here..." />
+        <button id="generate-btn">Generate Speech</button>
+        <div id="audio-container" style="display:none;">
+            <audio controls id="audio-player"></audio>
+        </div>
+        <div id="status"></div>
+    </div>
+    <script src="/static/script.js"></script>
 </body>
 </html>
