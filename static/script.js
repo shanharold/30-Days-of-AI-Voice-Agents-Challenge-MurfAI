@@ -68,3 +68,98 @@ document.getElementById('generate-btn').onclick = async function() {
         statusDiv.style.color = "#ff4d4f";
     }
 };
+
+// Echo Bot logic
+let mediaRecorder;
+let audioChunks = [];
+
+const startBtn = document.getElementById('start-recording');
+const stopBtn = document.getElementById('stop-recording');
+const audioPlayback = document.getElementById('audio-playback');
+const recordingStatus = document.getElementById('recording-status');
+const transcriptOutput = document.getElementById('transcript-output');
+
+startBtn.addEventListener('click', async () => {
+    recordingStatus.textContent = "Recording...";
+    recordingStatus.style.color = "#fff";
+    audioPlayback.style.display = "none";
+    audioChunks = [];
+    stopBtn.disabled = false;
+    startBtn.disabled = true;
+    transcriptOutput.textContent = ""; // Clear previous transcript
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable = (e) => {
+            audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            audioPlayback.src = audioUrl;
+            audioPlayback.style.display = "block";
+            recordingStatus.textContent = "Playback ready. Listen below!";
+            recordingStatus.style.color = "#0ff";
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+
+            // --- Upload Audio to Server ---
+            recordingStatus.textContent = "Uploading recording...";
+            recordingStatus.style.color = "#fff";
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'echo-recording.webm');
+            fetch('/api/upload-audio', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                recordingStatus.textContent = `Upload successful! Name: ${data.name}, Type: ${data.content_type}, Size: ${data.size} bytes.`;
+                recordingStatus.style.color = "#0ff";
+            })
+            .catch(err => {
+                recordingStatus.textContent = "Upload failed.";
+                recordingStatus.style.color = "#ff4d4f";
+            });
+
+            // --- Send Audio for Transcription ---
+            transcriptOutput.textContent = "Transcribing audio...";
+            const transcribeForm = new FormData();
+            transcribeForm.append("file", audioBlob, "echo-recording.webm");
+            fetch("/transcribe/file", {
+                method: "POST",
+                body: transcribeForm
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.transcript) {
+                    transcriptOutput.textContent = data.transcript;
+                } else {
+                    transcriptOutput.textContent = "Transcription failed: " + (data.error || "Unknown error");
+                }
+            })
+            .catch(() => {
+                transcriptOutput.textContent = "Transcription error. Please try again.";
+            });
+        };
+
+        mediaRecorder.start();
+    } catch (err) {
+        recordingStatus.textContent = "Microphone access denied or unavailable.";
+        recordingStatus.style.color = "#ff4d4f";
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+    }
+});
+
+stopBtn.addEventListener('click', () => {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        recordingStatus.textContent = "Processing recording...";
+        recordingStatus.style.color = "#fff";
+        stopBtn.disabled = true;
+    }
+});
