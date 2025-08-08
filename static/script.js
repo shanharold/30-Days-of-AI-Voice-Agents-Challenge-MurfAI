@@ -79,10 +79,18 @@ const audioPlayback = document.getElementById('audio-playback');
 const recordingStatus = document.getElementById('recording-status');
 const transcriptOutput = document.getElementById('transcript-output');
 
+// NEW: Murf echo playback
+const murfEchoPlayer = document.createElement('audio');
+murfEchoPlayer.controls = true;
+murfEchoPlayer.id = 'murf-echo-player';
+murfEchoPlayer.style.display = "none";
+document.getElementById('echo-bot-section').appendChild(murfEchoPlayer);
+
 startBtn.addEventListener('click', async () => {
     recordingStatus.textContent = "Recording...";
     recordingStatus.style.color = "#fff";
     audioPlayback.style.display = "none";
+    murfEchoPlayer.style.display = "none";
     audioChunks = [];
     stopBtn.disabled = false;
     startBtn.disabled = true;
@@ -143,6 +151,31 @@ startBtn.addEventListener('click', async () => {
             })
             .catch(() => {
                 transcriptOutput.textContent = "Transcription error. Please try again.";
+            });
+
+            // --- NEW: Send Audio to Murf Echo Endpoint ---
+            recordingStatus.textContent = "Sending to Murf Echo Bot...";
+            const murfEchoForm = new FormData();
+            murfEchoForm.append("audio", audioBlob, "echo-recording.webm");
+            fetch("/tts/echo", {
+                method: "POST",
+                body: murfEchoForm
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.audio_url) {
+                    murfEchoPlayer.src = data.audio_url;
+                    murfEchoPlayer.style.display = "block";
+                    recordingStatus.textContent = "Murf voice echo ready!";
+                    recordingStatus.style.color = "#0ff";
+                } else {
+                    recordingStatus.textContent = "Murf echo failed: " + (data.error || "Unknown error");
+                    recordingStatus.style.color = "#ff4d4f";
+                }
+            })
+            .catch(() => {
+                recordingStatus.textContent = "Error getting Murf echo.";
+                recordingStatus.style.color = "#ff4d4f";
             });
         };
 

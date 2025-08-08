@@ -1,12 +1,14 @@
 import os
 from fastapi import FastAPI, UploadFile, File
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from murf import Murf
 import assemblyai as aai
+
+import io
 
 load_dotenv()
 
@@ -93,9 +95,51 @@ async def transcribe_file(file: UploadFile = File(...)):
         aai.settings.api_key = ASSEMBLYAI_API_KEY
         transcriber = aai.Transcriber()
         # AssemblyAI SDK accepts file-like objects, so wrap in BytesIO
-        import io
         transcript = transcriber.transcribe(io.BytesIO(audio_bytes))
         return {"transcript": transcript.text, "success": True}
     except Exception as e:
         print("Error in /transcribe/file:", e)
         return {"transcript": "", "success": False, "error": str(e)}
+
+# === NEW ENDPOINT: /tts/echo ===
+
+@app.post("/tts/echo")
+async def echo_bot(audio: UploadFile = File(...)):
+    try:
+        # Step 1: Read audio bytes
+        audio_bytes = await audio.read()
+
+        # Step 2: Transcribe using AssemblyAI
+        aai.settings.api_key = ASSEMBLYAI_API_KEY
+        transcriber = aai.Transcriber()
+        transcript = transcriber.transcribe(io.BytesIO(audio_bytes))
+        transcript_text = transcript.text
+
+        # Step 3: Generate TTS audio using Murf
+        client = Murf(api_key=api_key)
+        params = {
+            "text": transcript_text,
+            "voice_id": "en-US-natalie",  # You can change this to any Murf voice available
+            "format": "MP3",
+            "channel_type": "STEREO",
+            "sample_rate": 44100,
+            "style": "Promo"
+        }
+        res = client.text_to_speech.generate(**params)
+        murf_audio_url = res.audio_file
+
+        return JSONResponse(content={
+            "success": True,
+            "audio_url": murf_audio_url,
+            "transcript": transcript_text,
+            "message": "Echo bot Murf TTS generated!"
+        })
+    except Exception as e:
+        print("Error in /tts/echo:", e)
+        return JSONResponse(content={
+            "success": False,
+            "audio_url": None,
+            "transcript": "",
+            "message": "Echo bot failed.",
+            "error": str(e)
+        })
