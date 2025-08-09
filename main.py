@@ -10,6 +10,13 @@ import assemblyai as aai
 
 import io
 
+# Import Gemini API
+try:
+    from google.generativeai import GenerativeModel, configure
+except ImportError:
+    GenerativeModel = None
+    configure = None
+
 load_dotenv()
 
 app = FastAPI()
@@ -141,5 +148,54 @@ async def echo_bot(audio: UploadFile = File(...)):
             "audio_url": None,
             "transcript": "",
             "message": "Echo bot failed.",
+            "error": str(e)
+        })
+
+# === NEW ENDPOINT: /llm/query ===
+
+class LLMQueryRequest(BaseModel):
+    text: str
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    print("WARNING: GEMINI_API_KEY not found in .env! LLM endpoint will not work.")
+
+@app.post("/llm/query")
+async def llm_query(request: LLMQueryRequest):
+    if GenerativeModel is None or configure is None:
+        return JSONResponse(content={
+            "success": False,
+            "response": "",
+            "error": "google-generativeai package is not installed. Run 'pip install google-generativeai'."
+        })
+    if not GEMINI_API_KEY:
+        return JSONResponse(content={
+            "success": False,
+            "response": "",
+            "error": "GEMINI_API_KEY is missing in .env file."
+        })
+    try:
+        configure(api_key=GEMINI_API_KEY)
+        model = GenerativeModel("gemini-2.5-pro")
+        chat = model.start_chat(history=[])
+        gemini_response = chat.send_message(request.text)
+        # Depending on the SDK, the response might be in response.text or response.candidates[0].content.parts
+        # We'll try to get the best output
+        if hasattr(gemini_response, 'text'):
+            response_text = gemini_response.text
+        elif hasattr(gemini_response, 'candidates'):
+            response_text = gemini_response.candidates[0].content.parts[0].text
+        else:
+            response_text = str(gemini_response)
+        return JSONResponse(content={
+            "success": True,
+            "response": response_text,
+            "error": None
+        })
+    except Exception as e:
+        print("Error in /llm/query:", e)
+        return JSONResponse(content={
+            "success": False,
+            "response": "",
             "error": str(e)
         })
