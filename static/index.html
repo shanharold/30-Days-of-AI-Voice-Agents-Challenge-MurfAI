@@ -1,46 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Voice Agent - Day 6</title>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8" />
+  <title>Voice Agent - LLM + TTS</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Montserrat:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-    <div id="robot-face">
-        <div class="antenna"></div>
-        <div class="antenna-tip"></div>
-        <div class="face">
-            <div class="eye left"><div class="pupil" id="pupil-left"></div></div>
-            <div class="eye right"><div class="pupil" id="pupil-right"></div></div>
-            <div class="mouth"></div>
-            <div class="chin"></div>
-        </div>
+  <div id="robot-face">
+    <div class="antenna"></div>
+    <div class="antenna-tip"></div>
+    <div class="face">
+      <div class="eye left"><div class="pupil" id="pupil-left"></div></div>
+      <div class="eye right"><div class="pupil" id="pupil-right"></div></div>
+      <div class="mouth"></div>
+      <div class="chin"></div>
     </div>
-    <div class="center-card">
-        <h1>Voice Agent <span>Day 6</span></h1>
-        <p class="subtitle">This is Shan's Voice agent</p>
-        <input type="text" id="input-box" placeholder="Type your message here..." />
-        <button id="generate-btn">Generate Speech</button>
-        <div id="audio-container" style="display:none;">
-            <audio controls id="audio-player"></audio>
-        </div>
-        <div id="status"></div>
-        
-        <!-- Echo Bot Section -->
-        <h1>Echo Bot</h1>
-        <div id="echo-bot-section">
-            <button id="start-recording">Start Recording</button>
-            <button id="stop-recording" disabled>Stop Recording</button>
-            <audio id="audio-playback" controls style="display:none"></audio>
-            <p id="recording-status"></p>
-            <!-- Transcript display -->
-            <div id="transcript-section" style="margin-top:18px;">
-                <h3 style="color:#fff;margin-bottom:6px;">Transcript:</h3>
-                <div id="transcript-output" style="color:#0ff; font-size:1.05rem; min-height:32px;"></div>
-            </div>
-        </div>
+  </div>
+
+  <div class="center-card">
+    <h1>Voice Agent <span>Day 9</span></h1>
+    <p class="subtitle">Advanced LLM Voice Agent</p>
+
+    <!-- TTS Classic -->
+    <input type="text" id="input-box" placeholder="Type your message here..." />
+    <button id="generate-btn">Generate Speech</button>
+    <div id="audio-container" style="display:none;">
+      <audio controls id="audio-player"></audio>
     </div>
-    <script src="/static/script.js"></script>
+    <div id="status"></div>
+
+    <!-- Echo Bot Section -->
+    <h2>Echo Bot (Audio → Murf)</h2>
+    <div id="echo-bot-section">
+      <button id="start-recording">Start Recording</button>
+      <button id="stop-recording" disabled>Stop Recording</button>
+      <audio id="audio-playback" controls style="display:none"></audio>
+      <p id="recording-status"></p>
+
+      <div id="transcript-section" style="margin-top:18px;">
+        <h3 style="color:#fff;margin-bottom:6px;">Transcript:</h3>
+        <div id="transcript-output" style="color:#0ff; font-size:1.05rem; min-height:32px;"></div>
+      </div>
+    </div>
+
+    <!-- LLM Query via Audio -->
+    <h2>Ask LLM via Audio</h2>
+    <div id="llm-audio-query-section">
+      <button id="llm-audio-query-btn" disabled>Query LLM with Last Recording</button>
+      <p id="llm-audio-query-status"></p>
+      <audio id="llm-audio-player" controls style="display:none"></audio>
+
+      <div style="margin-top:10px;">
+        <strong>Transcript:</strong>
+        <span id="llm-transcript-output" style="color:#0ff;"></span>
+        <span style="color:#ccc; font-size:0.9rem;"> (<span id="llm-transcript-count">0</span> chars)</span>
+      </div>
+      <!-- Authoritative source for LLM input -->
+      <input type="hidden" id="llm-transcript-hidden" value="" />
+
+      <div style="margin-top:10px;">
+        <strong>LLM Response:</strong>
+        <span id="llm-text-output" style="color:#fff;"></span>
+      </div>
+    </div>
+
+    <!-- LLM Query via Text -->
+    <h2>Ask LLM via Text</h2>
+    <input type="text" id="llm-input-box" placeholder="Type your question for LLM..." />
+    <button id="llm-text-query-btn">Query LLM (Text)</button>
+    <p id="llm-text-query-status"></p>
+    <audio id="llm-text-audio-player" controls style="display:none"></audio>
+    <div style="margin-top:10px;">
+      <strong>Transcript:</strong>
+      <span id="llm-text-transcript-output" style="color:#0ff;"></span>
+    </div>
+    <div style="margin-top:10px;">
+      <strong>LLM Response:</strong>
+      <span id="llm-text-output2" style="color:#fff;"></span>
+    </div>
+  </div>
+
+  <script src="/static/script.js"></script>
 </body>
 </html>
