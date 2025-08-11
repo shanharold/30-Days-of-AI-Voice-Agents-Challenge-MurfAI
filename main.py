@@ -1,7 +1,6 @@
 import os
 import io
-from typing import List
-
+from typing import List, Dict
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -10,8 +9,9 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from murf import Murf
 import assemblyai as aai
+from threading import Lock
 
-# Import Gemini API
+# Gemini API
 try:
     from google.generativeai import GenerativeModel, configure
 except ImportError:
@@ -42,9 +42,8 @@ app.add_middleware(
 MURF_API_KEY = os.getenv("MURF_API_KEY")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-MAX_LLM_LEN = 3000            # What we send to Gemini
-MAX_MURF_LEN = 3000           # Murf /v1/speech/generate limit
+MAX_LLM_LEN = 3000
+MAX_MURF_LEN = 3000
 
 # ---------- Models ----------
 class TTSRequest(BaseModel):
@@ -57,7 +56,6 @@ class LLMQueryRequest(BaseModel):
 
 # ---------- Utilities ----------
 def sanitize_text(s: str) -> str:
-    # Ensure it's a string and normalize whitespace
     if not isinstance(s, str):
         s = str(s)
     s = s.replace("\r", " ").replace("\n", " ")
@@ -68,20 +66,14 @@ def clamp_text(s: str, max_len: int) -> str:
     return s if len(s) <= max_len else s[:max_len]
 
 def split_into_chunks(text: str, max_len: int) -> List[str]:
-    """
-    Splits text into chunks no longer than max_len, breaking on word boundaries
-    when possible.
-    """
     text = text.strip()
     if len(text) <= max_len:
         return [text]
-
     chunks = []
     start = 0
     while start < len(text):
         end = min(start + max_len, len(text))
         if end < len(text):
-            # try to break on the last space within the window
             space = text.rfind(" ", start, end)
             if space != -1 and space > start:
                 end = space
@@ -106,10 +98,6 @@ def murf_tts(text: str, voice_id: str = "en-US-natalie", style: str = "Promo") -
     return res.audio_file
 
 def murf_tts_chunked(text: str, voice_id: str = "en-US-natalie", style: str = "Promo") -> List[str]:
-    """
-    Splits text into <= MAX_MURF_LEN char chunks and generates a Murf audio file for each chunk.
-    Returns a list of audio URLs in order.
-    """
     clean = sanitize_text(text)
     parts = split_into_chunks(clean, MAX_MURF_LEN)
     urls = []
@@ -118,8 +106,11 @@ def murf_tts_chunked(text: str, voice_id: str = "en-US-natalie", style: str = "P
         urls.append(url)
     return urls
 
-# ---------- Endpoints ----------
+# ---------- Conversation History ----------
+chat_histories: Dict[str, List[Dict[str, str]]] = {}
+chat_histories_lock = Lock()
 
+# ---------- Endpoints ----------
 @app.post("/api/tts")
 async def generate_tts(request: TTSRequest):
     try:
@@ -132,8 +123,6 @@ async def generate_tts(request: TTSRequest):
                 "message": "No text provided.",
                 "error": "EMPTY_TEXT"
             }
-
-        # Use chunked generation if longer than Murf's 3000 char limit
         if len(clean_text) > MAX_MURF_LEN:
             urls = murf_tts_chunked(clean_text, request.voice_id, request.style)
             return {
@@ -193,9 +182,7 @@ async def echo_bot(audio: UploadFile = File(...)):
         transcriber = aai.Transcriber()
         transcript = transcriber.transcribe(io.BytesIO(audio_bytes))
         transcript_text = sanitize_text(transcript.text or "")
-
         urls = murf_tts_chunked(transcript_text, "en-US-natalie", "Promo")
-
         return JSONResponse(content={
             "success": True,
             "audio_url": urls[0] if len(urls) == 1 else None,
@@ -216,12 +203,10 @@ async def echo_bot(audio: UploadFile = File(...)):
 @app.post("/llm/query")
 async def llm_query(request: Request):
     try:
-        # STRICT: Accept ONLY JSON {text: "..."}
         body = await request.json()
         raw_text = body.get("text", "")
         text = sanitize_text(raw_text)
         received_len = len(text)
-
         if not text:
             return JSONResponse(content={
                 "success": False,
@@ -231,11 +216,8 @@ async def llm_query(request: Request):
                 "transcript": "",
                 "error": "No text provided for LLM query."
             })
-
-        # Clamp what we send to Gemini
         clamped_text = clamp_text(text, MAX_LLM_LEN)
         print(f"[LLM QUERY] Received length={received_len}, sending length={len(clamped_text)}")
-
         if GenerativeModel is None or configure is None or not GEMINI_API_KEY:
             return JSONResponse(content={
                 "success": False,
@@ -245,15 +227,11 @@ async def llm_query(request: Request):
                 "transcript": clamped_text,
                 "error": "Gemini API not available."
             })
-
         configure(api_key=GEMINI_API_KEY)
         model = GenerativeModel("gemini-2.5-pro")
         chat = model.start_chat(history=[])
-
         try:
             gemini_response = chat.send_message(clamped_text)
-
-            # Robust extraction from Gemini response
             llm_text = ""
             if hasattr(gemini_response, "text") and gemini_response.text:
                 llm_text = gemini_response.text
@@ -265,7 +243,6 @@ async def llm_query(request: Request):
                     llm_text = getattr(part0, "text", "") or getattr(part0, "data", "") or ""
             else:
                 llm_text = str(gemini_response)
-
             llm_text = sanitize_text(llm_text)
             if not llm_text:
                 return JSONResponse(content={
@@ -285,8 +262,6 @@ async def llm_query(request: Request):
                 "transcript": clamped_text,
                 "error": f"LLM query failed: {e}"
             })
-
-        # Generate Murf audio, chunking if needed (3000 char limit)
         try:
             if len(llm_text) > MAX_MURF_LEN:
                 urls = murf_tts_chunked(llm_text, "en-US-natalie", "Promo")
@@ -309,7 +284,6 @@ async def llm_query(request: Request):
                     "error": None
                 })
         except Exception as e:
-            # Return LLM text even if TTS fails
             return JSONResponse(content={
                 "success": True,
                 "response": llm_text,
@@ -318,7 +292,6 @@ async def llm_query(request: Request):
                 "transcript": clamped_text,
                 "error": f"TTS failed: {e}"
             })
-
     except Exception as e:
         return JSONResponse(content={
             "success": False,
@@ -326,5 +299,107 @@ async def llm_query(request: Request):
             "audio_url": None,
             "audio_urls": [],
             "transcript": "",
+            "error": str(e)
+        })
+
+# ---------- Day 10: Conversational Chat Endpoint ----------
+@app.post("/agent/chat/{session_id}")
+async def agent_chat(session_id: str, audio: UploadFile = File(...)):
+    try:
+        # 1. STT
+        audio_bytes = await audio.read()
+        aai.settings.api_key = ASSEMBLYAI_API_KEY
+        transcriber = aai.Transcriber()
+        transcript = transcriber.transcribe(io.BytesIO(audio_bytes))
+        user_text = sanitize_text(transcript.text or "")
+
+        if not user_text:
+            return JSONResponse(content={
+                "success": False,
+                "error": "No transcript from audio."
+            })
+
+        # 2. Get/Create chat history for session
+        with chat_histories_lock:
+            history = chat_histories.get(session_id, [])
+
+        # 3. Append user message
+        history.append({"role": "user", "content": user_text})
+
+        # 4. Prepare Gemini format
+        gemini_history = [
+            {"role": msg["role"], "parts": [msg["content"]]}
+            for msg in history
+        ]
+
+        # 5. LLM response
+        if GenerativeModel is None or configure is None or not GEMINI_API_KEY:
+            return JSONResponse(content={
+                "success": False,
+                "error": "Gemini API not available."
+            })
+        configure(api_key=GEMINI_API_KEY)
+        model = GenerativeModel("gemini-2.5-pro")
+        chat = model.start_chat(history=gemini_history)
+
+        try:
+            gemini_response = chat.send_message(user_text)
+            llm_text = ""
+            if hasattr(gemini_response, "text") and gemini_response.text:
+                llm_text = gemini_response.text
+            elif hasattr(gemini_response, "candidates") and gemini_response.candidates:
+                candidate = gemini_response.candidates[0]
+                content = getattr(candidate, "content", None)
+                if content and getattr(content, "parts", None):
+                    part0 = content.parts[0]
+                    llm_text = getattr(part0, "text", "") or getattr(part0, "data", "") or ""
+            else:
+                llm_text = str(gemini_response)
+            llm_text = sanitize_text(llm_text)
+        except Exception as e:
+            return JSONResponse(content={
+                "success": False,
+                "error": f"LLM query failed: {e}"
+            })
+
+        # 6. Append LLM response to history
+        history.append({"role": "model", "content": llm_text})
+
+        # 7. Save updated history
+        with chat_histories_lock:
+            chat_histories[session_id] = history
+
+        # 8. TTS
+        try:
+            if len(llm_text) > MAX_MURF_LEN:
+                urls = murf_tts_chunked(llm_text, "en-US-natalie", "Promo")
+                return JSONResponse(content={
+                    "success": True,
+                    "audio_url": None,
+                    "audio_urls": urls,
+                    "response": llm_text,
+                    "transcript": user_text,
+                })
+            else:
+                audio_url = murf_tts(llm_text, "en-US-natalie", "Promo")
+                return JSONResponse(content={
+                    "success": True,
+                    "audio_url": audio_url,
+                    "audio_urls": [],
+                    "response": llm_text,
+                    "transcript": user_text,
+                })
+        except Exception as e:
+            return JSONResponse(content={
+                "success": True,
+                "audio_url": None,
+                "audio_urls": [],
+                "response": llm_text,
+                "transcript": user_text,
+                "error": f"TTS failed: {e}"
+            })
+    except Exception as e:
+        return JSONResponse(content={
+            "success": False,
             "error": str(e)
         })
