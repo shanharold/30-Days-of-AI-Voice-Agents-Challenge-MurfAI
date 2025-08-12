@@ -106,6 +106,15 @@ def murf_tts_chunked(text: str, voice_id: str = "en-US-natalie", style: str = "P
         urls.append(url)
     return urls
 
+# ---------- Fallback Audio ----------
+def get_fallback_audio():
+    try:
+        # Try to generate fallback audio using Murf
+        return murf_tts("I'm having trouble connecting right now. Please try again later.", "en-US-natalie", "Promo")
+    except Exception:
+        # If Murf fails, just return None (client can handle a local fallback)
+        return None
+
 # ---------- Conversation History ----------
 chat_histories: Dict[str, List[Dict[str, str]]] = {}
 chat_histories_lock = Lock()
@@ -142,25 +151,35 @@ async def generate_tts(request: TTSRequest):
                 "error": None
             }
     except Exception as e:
+        fallback_url = get_fallback_audio()
         return {
             "success": False,
-            "audio_url": None,
+            "audio_url": fallback_url,
             "audio_urls": [],
-            "message": "Text-to-speech Conversion failed!",
+            "message": "Text-to-speech Conversion failed! Playing fallback audio.",
             "error": str(e)
         }
 
 @app.post("/api/upload-audio")
 async def upload_audio(audio: UploadFile = File(...)):
-    file_location = os.path.join(UPLOAD_DIR, audio.filename)
-    with open(file_location, "wb") as f:
-        content = await audio.read()
-        f.write(content)
-    return {
-        "name": audio.filename,
-        "content_type": audio.content_type,
-        "size": len(content)
-    }
+    try:
+        file_location = os.path.join(UPLOAD_DIR, audio.filename)
+        with open(file_location, "wb") as f:
+            content = await audio.read()
+            f.write(content)
+        return {
+            "name": audio.filename,
+            "content_type": audio.content_type,
+            "size": len(content)
+        }
+    except Exception as e:
+        fallback_url = get_fallback_audio()
+        return {
+            "success": False,
+            "audio_url": fallback_url,
+            "message": "Audio upload failed! Playing fallback audio.",
+            "error": str(e)
+        }
 
 @app.post("/transcribe/file")
 async def transcribe_file(file: UploadFile = File(...)):
@@ -172,7 +191,8 @@ async def transcribe_file(file: UploadFile = File(...)):
         text = sanitize_text(transcript.text or "")
         return {"transcript": text, "success": True}
     except Exception as e:
-        return {"transcript": "", "success": False, "error": str(e)}
+        fallback_url = get_fallback_audio()
+        return {"transcript": "", "success": False, "error": str(e), "audio_url": fallback_url}
 
 @app.post("/tts/echo")
 async def echo_bot(audio: UploadFile = File(...)):
@@ -191,12 +211,13 @@ async def echo_bot(audio: UploadFile = File(...)):
             "message": "Echo bot Murf TTS generated!"
         })
     except Exception as e:
+        fallback_url = get_fallback_audio()
         return JSONResponse(content={
             "success": False,
-            "audio_url": None,
+            "audio_url": fallback_url,
             "audio_urls": [],
             "transcript": "",
-            "message": "Echo bot failed.",
+            "message": "Echo bot failed. Playing fallback audio.",
             "error": str(e)
         })
 
@@ -219,13 +240,14 @@ async def llm_query(request: Request):
         clamped_text = clamp_text(text, MAX_LLM_LEN)
         print(f"[LLM QUERY] Received length={received_len}, sending length={len(clamped_text)}")
         if GenerativeModel is None or configure is None or not GEMINI_API_KEY:
+            fallback_url = get_fallback_audio()
             return JSONResponse(content={
                 "success": False,
                 "response": "",
-                "audio_url": None,
+                "audio_url": fallback_url,
                 "audio_urls": [],
                 "transcript": clamped_text,
-                "error": "Gemini API not available."
+                "error": "Gemini API not available. Playing fallback audio."
             })
         configure(api_key=GEMINI_API_KEY)
         model = GenerativeModel("gemini-2.5-pro")
@@ -245,22 +267,24 @@ async def llm_query(request: Request):
                 llm_text = str(gemini_response)
             llm_text = sanitize_text(llm_text)
             if not llm_text:
+                fallback_url = get_fallback_audio()
                 return JSONResponse(content={
                     "success": False,
                     "response": "",
-                    "audio_url": None,
+                    "audio_url": fallback_url,
                     "audio_urls": [],
                     "transcript": clamped_text,
-                    "error": "LLM did not produce a response. Try a longer or different prompt."
+                    "error": "LLM did not produce a response. Playing fallback audio."
                 })
         except Exception as e:
+            fallback_url = get_fallback_audio()
             return JSONResponse(content={
                 "success": False,
                 "response": "",
-                "audio_url": None,
+                "audio_url": fallback_url,
                 "audio_urls": [],
                 "transcript": clamped_text,
-                "error": f"LLM query failed: {e}"
+                "error": f"LLM query failed: {e}. Playing fallback audio."
             })
         try:
             if len(llm_text) > MAX_MURF_LEN:
@@ -284,19 +308,21 @@ async def llm_query(request: Request):
                     "error": None
                 })
         except Exception as e:
+            fallback_url = get_fallback_audio()
             return JSONResponse(content={
                 "success": True,
                 "response": llm_text,
-                "audio_url": None,
+                "audio_url": fallback_url,
                 "audio_urls": [],
                 "transcript": clamped_text,
-                "error": f"TTS failed: {e}"
+                "error": f"TTS failed: {e}. Playing fallback audio."
             })
     except Exception as e:
+        fallback_url = get_fallback_audio()
         return JSONResponse(content={
             "success": False,
             "response": "",
-            "audio_url": None,
+            "audio_url": fallback_url,
             "audio_urls": [],
             "transcript": "",
             "error": str(e)
@@ -314,9 +340,11 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
         user_text = sanitize_text(transcript.text or "")
 
         if not user_text:
+            fallback_url = get_fallback_audio()
             return JSONResponse(content={
                 "success": False,
-                "error": "No transcript from audio."
+                "audio_url": fallback_url,
+                "error": "No transcript from audio. Playing fallback audio."
             })
 
         # 2. Get/Create chat history for session
@@ -334,9 +362,11 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
 
         # 5. LLM response
         if GenerativeModel is None or configure is None or not GEMINI_API_KEY:
+            fallback_url = get_fallback_audio()
             return JSONResponse(content={
                 "success": False,
-                "error": "Gemini API not available."
+                "audio_url": fallback_url,
+                "error": "Gemini API not available. Playing fallback audio."
             })
         configure(api_key=GEMINI_API_KEY)
         model = GenerativeModel("gemini-2.5-pro")
@@ -357,9 +387,11 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
                 llm_text = str(gemini_response)
             llm_text = sanitize_text(llm_text)
         except Exception as e:
+            fallback_url = get_fallback_audio()
             return JSONResponse(content={
                 "success": False,
-                "error": f"LLM query failed: {e}"
+                "audio_url": fallback_url,
+                "error": f"LLM query failed: {e}. Playing fallback audio."
             })
 
         # 6. Append LLM response to history
@@ -390,16 +422,19 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
                     "transcript": user_text,
                 })
         except Exception as e:
+            fallback_url = get_fallback_audio()
             return JSONResponse(content={
                 "success": True,
-                "audio_url": None,
+                "audio_url": fallback_url,
                 "audio_urls": [],
                 "response": llm_text,
                 "transcript": user_text,
-                "error": f"TTS failed: {e}"
+                "error": f"TTS failed: {e}. Playing fallback audio."
             })
     except Exception as e:
+        fallback_url = get_fallback_audio()
         return JSONResponse(content={
             "success": False,
+            "audio_url": fallback_url,
             "error": str(e)
         })

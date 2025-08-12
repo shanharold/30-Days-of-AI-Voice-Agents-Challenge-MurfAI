@@ -98,6 +98,15 @@ function playAudioPlaylist(urls, player, statusEl, onFinish) {
   playIndex(idx);
 }
 
+// --- Fallback Audio Helper ---
+function playFallbackAudio(player, statusEl) {
+  player.src = "/static/fallback.mp3";
+  player.style.display = "block";
+  statusEl.textContent = "Fallback audio: I'm having trouble connecting right now.";
+  statusEl.style.color = "#fa0";
+  player.play().catch(() => {});
+}
+
 // --- Classic TTS ---
 document.getElementById("generate-btn")?.addEventListener("click", async () => {
   const text = document.getElementById("input-box").value.trim();
@@ -135,12 +144,22 @@ document.getElementById("generate-btn")?.addEventListener("click", async () => {
         statusDiv.style.color = "#ff4d4f";
       }
     } else {
-      statusDiv.textContent = data.message || "Failed to generate speech.";
-      statusDiv.style.color = "#ff4d4f";
+      // Check for fallback audio from backend
+      if (data.audio_url) {
+        audioPlayer.src = data.audio_url;
+        audioContainer.style.display = "block";
+        statusDiv.textContent = "Playing fallback audio.";
+        statusDiv.style.color = "#fa0";
+        audioPlayer.play();
+      } else {
+        playFallbackAudio(audioPlayer, statusDiv);
+        audioContainer.style.display = "block";
+      }
     }
   } catch (err) {
-    statusDiv.textContent = "Error contacting backend!";
-    statusDiv.style.color = "#ff4d4f";
+    // Network or unexpected error, play local fallback
+    playFallbackAudio(audioPlayer, statusDiv);
+    audioContainer.style.display = "block";
   }
 });
 
@@ -239,13 +258,22 @@ startBtn?.addEventListener("click", async () => {
               recordingStatus.style.color = "#ff4d4f";
             }
           } else {
-            recordingStatus.textContent = "Murf echo failed: " + (data.error || "Unknown error");
-            recordingStatus.style.color = "#ff4d4f";
+            // Fallback audio if provided or local
+            if (data.audio_url) {
+              murfEchoPlayer.src = data.audio_url;
+              murfEchoPlayer.style.display = "block";
+              recordingStatus.textContent = "Playing fallback audio.";
+              recordingStatus.style.color = "#fa0";
+              murfEchoPlayer.play();
+            } else {
+              playFallbackAudio(murfEchoPlayer, recordingStatus);
+              murfEchoPlayer.style.display = "block";
+            }
           }
         })
         .catch(() => {
-          recordingStatus.textContent = "Error getting Murf echo.";
-          recordingStatus.style.color = "#ff4d4f";
+          playFallbackAudio(murfEchoPlayer, recordingStatus);
+          murfEchoPlayer.style.display = "block";
         });
 
       document.getElementById("llm-audio-query-btn").disabled = false;
@@ -327,13 +355,22 @@ llmAudioBtn?.addEventListener("click", async () => {
         llmAudioPlaylistStatus.textContent = "";
       }
     } else {
-      llmAudioStatus.textContent = "LLM audio query failed: " + (data.error || "Unknown error");
-      llmAudioStatus.style.color = "#ff4d4f";
+      // Play fallback audio if present, else local fallback
+      if (data.audio_url) {
+        llmAudioPlayer.src = data.audio_url;
+        llmAudioPlayer.style.display = "block";
+        llmAudioStatus.textContent = "Playing fallback audio.";
+        llmAudioStatus.style.color = "#fa0";
+        llmAudioPlayer.play();
+      } else {
+        playFallbackAudio(llmAudioPlayer, llmAudioStatus);
+        llmAudioPlayer.style.display = "block";
+      }
       llmAudioPlaylistStatus.textContent = "";
     }
   } catch (e) {
-    llmAudioStatus.textContent = "Error querying LLM with transcript!";
-    llmAudioStatus.style.color = "#ff4d4f";
+    playFallbackAudio(llmAudioPlayer, llmAudioStatus);
+    llmAudioPlayer.style.display = "block";
     llmAudioPlaylistStatus.textContent = "";
   } finally {
     llmAudioBtn.disabled = false;
@@ -391,12 +428,21 @@ document.getElementById("llm-text-query-btn")?.addEventListener("click", async (
         statusDiv.style.color = "#ff4d4f";
       }
     } else {
-      statusDiv.textContent = data.error || "Failed to get LLM response.";
-      statusDiv.style.color = "#ff4d4f";
+      // Fallback audio if provided or local fallback
+      if (data.audio_url) {
+        audioPlayer.src = data.audio_url;
+        audioPlayer.style.display = "block";
+        statusDiv.textContent = "Playing fallback audio.";
+        statusDiv.style.color = "#fa0";
+        audioPlayer.play();
+      } else {
+        playFallbackAudio(audioPlayer, statusDiv);
+        audioPlayer.style.display = "block";
+      }
     }
   } catch (err) {
-    statusDiv.textContent = "Error contacting backend!";
-    statusDiv.style.color = "#ff4d4f";
+    playFallbackAudio(audioPlayer, statusDiv);
+    audioPlayer.style.display = "block";
   }
 });
 
@@ -448,15 +494,24 @@ function startConvoRecording() {
               convoAudioPlayer.play();
             }
           } else {
-            convoStatus.textContent = "Conversation failed: " + (data.error || "Unknown error");
-            convoStatus.style.color = "#ff4d4f";
+            // Fallback audio if provided or local fallback
+            if (data.audio_url) {
+              convoAudioPlayer.src = data.audio_url;
+              convoAudioPlayer.style.display = "block";
+              convoStatus.textContent = "Playing fallback audio.";
+              convoStatus.style.color = "#fa0";
+              convoAudioPlayer.play();
+            } else {
+              playFallbackAudio(convoAudioPlayer, convoStatus);
+              convoAudioPlayer.style.display = "block";
+            }
             convoStartBtn.disabled = false;
             convoStopBtn.disabled = true;
           }
         })
         .catch(() => {
-          convoStatus.textContent = "Error contacting bot.";
-          convoStatus.style.color = "#ff4d4f";
+          playFallbackAudio(convoAudioPlayer, convoStatus);
+          convoAudioPlayer.style.display = "block";
           convoStartBtn.disabled = false;
           convoStopBtn.disabled = true;
         });
