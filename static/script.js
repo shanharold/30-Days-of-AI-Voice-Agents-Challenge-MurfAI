@@ -43,38 +43,16 @@ function getSessionId() {
 }
 const sessionId = getSessionId();
 
-// --- Helpers ---
-const MAX_LLM_LEN = 3000;
+// --- Conversational Bot Section (Day 12 UI) ---
+let convoRecorder;
+let convoAudioChunks = [];
+const recordBtn = document.getElementById("convo-record-btn");
+const audioPlayer = document.getElementById("convo-audio-player");
+const statusDiv = document.getElementById("convo-status");
+const botOutput = document.getElementById("convo-bot-text-output");
+const recordingIndicator = document.getElementById("recording-indicator");
 
-function sanitize(str) {
-  if (typeof str !== "string") str = String(str);
-  return str.replace(/\r/g, " ").replace(/\n/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function setHiddenTranscript(text) {
-  const hidden = document.getElementById("llm-transcript-hidden");
-  const displayTop = document.getElementById("transcript-output");
-  const displayLLM = document.getElementById("llm-transcript-output");
-  const count = document.getElementById("llm-transcript-count");
-
-  const clean = sanitize(text || "");
-  hidden.value = clean;
-  if (displayTop) displayTop.textContent = clean;
-  if (displayLLM) displayLLM.textContent = clean;
-  if (count) count.textContent = clean.length;
-}
-
-function clearHiddenTranscript(message) {
-  const hidden = document.getElementById("llm-transcript-hidden");
-  const displayTop = document.getElementById("transcript-output");
-  const displayLLM = document.getElementById("llm-transcript-output");
-  const count = document.getElementById("llm-transcript-count");
-
-  hidden.value = "";
-  if (displayTop) displayTop.textContent = "";
-  if (displayLLM) displayLLM.textContent = message || "No transcript available. Please record first.";
-  if (count) count.textContent = "0";
-}
+let isRecording = false;
 
 function playAudioPlaylist(urls, player, statusEl, onFinish) {
   if (!urls || !urls.length) return;
@@ -88,7 +66,7 @@ function playAudioPlaylist(urls, player, statusEl, onFinish) {
     }
     const url = urls[i];
     player.src = url;
-    player.style.display = "block";
+    player.style.display = "none";
     statusEl && (statusEl.textContent = `Playing segment ${i + 1}/${urls.length} ...`);
     player.onended = () => playIndex(i + 1);
     player.play().catch(() => {});
@@ -98,373 +76,24 @@ function playAudioPlaylist(urls, player, statusEl, onFinish) {
   playIndex(idx);
 }
 
-// --- Fallback Audio Helper ---
 function playFallbackAudio(player, statusEl) {
   player.src = "/static/fallback.mp3";
-  player.style.display = "block";
+  player.style.display = "none";
   statusEl.textContent = "Fallback audio: I'm having trouble connecting right now.";
   statusEl.style.color = "#fa0";
   player.play().catch(() => {});
 }
 
-// --- Classic TTS ---
-document.getElementById("generate-btn")?.addEventListener("click", async () => {
-  const text = document.getElementById("input-box").value.trim();
-  const statusDiv = document.getElementById("status");
-  const audioContainer = document.getElementById("audio-container");
-  const audioPlayer = document.getElementById("audio-player");
+async function startConvoRecording() {
+  statusDiv.textContent = "Recording (conversation)...";
   statusDiv.style.color = "#fff";
-  statusDiv.textContent = "";
-  audioContainer.style.display = "none";
-
-  if (!text) {
-    statusDiv.textContent = "Please enter some text.";
-    statusDiv.style.color = "#ff4d4f";
-    return;
-  }
-  statusDiv.textContent = "Generating speech...";
-  try {
-    const res = await fetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_id: "en-US-natalie", style: "Promo" }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      if (data.audio_urls && data.audio_urls.length) {
-        audioContainer.style.display = "block";
-        playAudioPlaylist(data.audio_urls, audioPlayer, statusDiv);
-      } else if (data.audio_url) {
-        audioPlayer.src = data.audio_url;
-        audioContainer.style.display = "block";
-        statusDiv.textContent = "Speech generated!";
-        statusDiv.style.color = "#0ff";
-      } else {
-        statusDiv.textContent = "No audio URL(s) returned.";
-        statusDiv.style.color = "#ff4d4f";
-      }
-    } else {
-      // Check for fallback audio from backend
-      if (data.audio_url) {
-        audioPlayer.src = data.audio_url;
-        audioContainer.style.display = "block";
-        statusDiv.textContent = "Playing fallback audio.";
-        statusDiv.style.color = "#fa0";
-        audioPlayer.play();
-      } else {
-        playFallbackAudio(audioPlayer, statusDiv);
-        audioContainer.style.display = "block";
-      }
-    }
-  } catch (err) {
-    // Network or unexpected error, play local fallback
-    playFallbackAudio(audioPlayer, statusDiv);
-    audioContainer.style.display = "block";
-  }
-});
-
-// --- Echo Bot recording/transcription ---
-let mediaRecorder;
-let audioChunks = [];
-
-const startBtn = document.getElementById("start-recording");
-const stopBtn = document.getElementById("stop-recording");
-const audioPlayback = document.getElementById("audio-playback");
-const recordingStatus = document.getElementById("recording-status");
-
-const murfEchoPlayer = document.createElement("audio");
-murfEchoPlayer.controls = true;
-murfEchoPlayer.id = "murf-echo-player";
-murfEchoPlayer.style.display = "none";
-document.getElementById("echo-bot-section").appendChild(murfEchoPlayer);
-
-startBtn?.addEventListener("click", async () => {
-  recordingStatus.textContent = "Recording...";
-  recordingStatus.style.color = "#fff";
-  audioPlayback.style.display = "none";
-  murfEchoPlayer.style.display = "none";
-  audioChunks = [];
-  stopBtn.disabled = false;
-  startBtn.disabled = true;
-  clearHiddenTranscript("");
+  audioPlayer.style.display = "none";
+  botOutput.textContent = "";
+  convoAudioChunks = [];
+  updateUI(true);
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
-
-    mediaRecorder.ondataavailable = (e) => {
-      audioChunks.push(e.data);
-    };
-
-    mediaRecorder.onstop = () => {
-      const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-      const audioUrl = URL.createObjectURL(audioBlob);
-      audioPlayback.src = audioUrl;
-      audioPlayback.style.display = "block";
-      recordingStatus.textContent = "Playback ready. Listen below!";
-      recordingStatus.style.color = "#0ff";
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-
-      recordingStatus.textContent = "Uploading recording...";
-      recordingStatus.style.color = "#fff";
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "echo-recording.webm");
-      fetch("/api/upload-audio", { method: "POST", body: formData })
-        .then((res) => res.json())
-        .then((data) => {
-          recordingStatus.textContent = `Upload successful! Name: ${data.name}, Type: ${data.content_type}, Size: ${data.size} bytes.`;
-          recordingStatus.style.color = "#0ff";
-        })
-        .catch(() => {
-          recordingStatus.textContent = "Upload failed.";
-          recordingStatus.style.color = "#ff4d4f";
-        });
-
-      const transcribeForm = new FormData();
-      transcribeForm.append("file", audioBlob, "echo-recording.webm");
-
-      const llmTranscriptOutput = document.getElementById("llm-transcript-output");
-      if (llmTranscriptOutput) llmTranscriptOutput.textContent = "Transcribing audio...";
-
-      fetch("/transcribe/file", { method: "POST", body: transcribeForm })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success && data.transcript) {
-            setHiddenTranscript(data.transcript);
-          } else {
-            clearHiddenTranscript("Transcription failed: " + (data.error || "Unknown error"));
-          }
-        })
-        .catch(() => {
-          clearHiddenTranscript("Transcription error. Please try again.");
-        });
-
-      const murfEchoForm = new FormData();
-      murfEchoForm.append("audio", audioBlob, "echo-recording.webm");
-      fetch("/tts/echo", { method: "POST", body: murfEchoForm })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            if (data.audio_urls && data.audio_urls.length) {
-              playAudioPlaylist(data.audio_urls, murfEchoPlayer, recordingStatus);
-            } else if (data.audio_url) {
-              murfEchoPlayer.src = data.audio_url;
-              murfEchoPlayer.style.display = "block";
-              recordingStatus.textContent = "Murf voice echo ready!";
-              recordingStatus.style.color = "#0ff";
-            } else {
-              recordingStatus.textContent = "Murf echo returned no audio URLs.";
-              recordingStatus.style.color = "#ff4d4f";
-            }
-          } else {
-            // Fallback audio if provided or local
-            if (data.audio_url) {
-              murfEchoPlayer.src = data.audio_url;
-              murfEchoPlayer.style.display = "block";
-              recordingStatus.textContent = "Playing fallback audio.";
-              recordingStatus.style.color = "#fa0";
-              murfEchoPlayer.play();
-            } else {
-              playFallbackAudio(murfEchoPlayer, recordingStatus);
-              murfEchoPlayer.style.display = "block";
-            }
-          }
-        })
-        .catch(() => {
-          playFallbackAudio(murfEchoPlayer, recordingStatus);
-          murfEchoPlayer.style.display = "block";
-        });
-
-      document.getElementById("llm-audio-query-btn").disabled = false;
-      document.getElementById("llm-audio-query-status").textContent =
-        "Ready to query LLM with your recording!";
-    };
-
-    mediaRecorder.start();
-  } catch (err) {
-    recordingStatus.textContent = "Microphone access denied or unavailable.";
-    recordingStatus.style.color = "#ff4d4f";
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-  }
-});
-
-stopBtn?.addEventListener("click", () => {
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    mediaRecorder.stop();
-    recordingStatus.textContent = "Processing recording...";
-    recordingStatus.style.color = "#fff";
-    stopBtn.disabled = true;
-  }
-});
-
-// --- LLM Audio Query ---
-const llmAudioBtn = document.getElementById("llm-audio-query-btn");
-const llmAudioStatus = document.getElementById("llm-audio-query-status");
-const llmAudioPlayer = document.getElementById("llm-audio-player");
-const llmAudioPlaylistStatus = document.getElementById("llm-audio-playlist-status");
-const llmTextOutput = document.getElementById("llm-text-output");
-
-llmAudioBtn?.addEventListener("click", async () => {
-  const hidden = document.getElementById("llm-transcript-hidden");
-  let toSend = sanitize(hidden.value || "");
-
-  if (!toSend) {
-    llmAudioStatus.textContent = "No transcript available. Please record first.";
-    llmAudioStatus.style.color = "#ff4d4f";
-    return;
-  }
-
-  if (toSend.length > MAX_LLM_LEN) {
-    toSend = toSend.slice(0, MAX_LLM_LEN);
-  }
-  document.getElementById("llm-transcript-count").textContent = toSend.length.toString();
-
-  llmAudioStatus.textContent = `Sending transcript to LLM (${toSend.length} chars)...`;
-  llmAudioStatus.style.color = "#fff";
-  llmAudioBtn.disabled = true;
-
-  try {
-    const res = await fetch("/llm/query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: toSend }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      document.getElementById("llm-transcript-output").textContent = data.transcript || toSend;
-      document.getElementById("llm-transcript-count").textContent = String(
-        (data.transcript || toSend).length
-      );
-      llmTextOutput.textContent = data.response || "";
-
-      if (data.audio_urls && data.audio_urls.length) {
-        playAudioPlaylist(data.audio_urls, llmAudioPlayer, llmAudioPlaylistStatus);
-        llmAudioStatus.textContent = "LLM response generated (multiple segments).";
-        llmAudioStatus.style.color = "#0ff";
-      } else if (data.audio_url) {
-        llmAudioPlayer.src = data.audio_url;
-        llmAudioPlayer.style.display = "block";
-        llmAudioStatus.textContent = "LLM response generated!";
-        llmAudioStatus.style.color = "#0ff";
-        llmAudioPlaylistStatus.textContent = "";
-      } else {
-        llmAudioStatus.textContent = "No audio URL(s) returned.";
-        llmAudioStatus.style.color = "#ff4d4f";
-        llmAudioPlaylistStatus.textContent = "";
-      }
-    } else {
-      // Play fallback audio if present, else local fallback
-      if (data.audio_url) {
-        llmAudioPlayer.src = data.audio_url;
-        llmAudioPlayer.style.display = "block";
-        llmAudioStatus.textContent = "Playing fallback audio.";
-        llmAudioStatus.style.color = "#fa0";
-        llmAudioPlayer.play();
-      } else {
-        playFallbackAudio(llmAudioPlayer, llmAudioStatus);
-        llmAudioPlayer.style.display = "block";
-      }
-      llmAudioPlaylistStatus.textContent = "";
-    }
-  } catch (e) {
-    playFallbackAudio(llmAudioPlayer, llmAudioStatus);
-    llmAudioPlayer.style.display = "block";
-    llmAudioPlaylistStatus.textContent = "";
-  } finally {
-    llmAudioBtn.disabled = false;
-  }
-});
-
-// --- LLM Text Query (separate text box) ---
-document.getElementById("llm-text-query-btn")?.addEventListener("click", async () => {
-  const text = document.getElementById("llm-input-box").value.trim();
-  const statusDiv = document.getElementById("llm-text-query-status");
-  const audioPlayer = document.getElementById("llm-text-audio-player");
-  const playlistStatus = document.getElementById("llm-text-playlist-status");
-  const transcriptOut = document.getElementById("llm-text-transcript-output");
-  const textOut = document.getElementById("llm-text-output2");
-  statusDiv.style.color = "#fff";
-  statusDiv.textContent = "";
-  audioPlayer.style.display = "none";
-  playlistStatus.textContent = "";
-  transcriptOut.textContent = "";
-  textOut.textContent = "";
-
-  let toSend = sanitize(text);
-  if (!toSend) {
-    statusDiv.textContent = "Please enter some text.";
-    statusDiv.style.color = "#ff4d4f";
-    return;
-  }
-  if (toSend.length > MAX_LLM_LEN) {
-    toSend = toSend.slice(0, MAX_LLM_LEN);
-  }
-
-  statusDiv.textContent = `Querying LLM (${toSend.length} chars)...`;
-  try {
-    const res = await fetch("/llm/query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: toSend }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      transcriptOut.textContent = data.transcript || toSend;
-      textOut.textContent = data.response || "";
-      if (data.audio_urls && data.audio_urls.length) {
-        playAudioPlaylist(data.audio_urls, audioPlayer, playlistStatus);
-        statusDiv.textContent = "LLM response generated (multiple segments).";
-        statusDiv.style.color = "#0ff";
-      } else if (data.audio_url) {
-        audioPlayer.src = data.audio_url;
-        audioPlayer.style.display = "block";
-        statusDiv.textContent = "LLM response generated!";
-        statusDiv.style.color = "#0ff";
-        playlistStatus.textContent = "";
-      } else {
-        statusDiv.textContent = "No audio URL(s) returned.";
-        statusDiv.style.color = "#ff4d4f";
-      }
-    } else {
-      // Fallback audio if provided or local fallback
-      if (data.audio_url) {
-        audioPlayer.src = data.audio_url;
-        audioPlayer.style.display = "block";
-        statusDiv.textContent = "Playing fallback audio.";
-        statusDiv.style.color = "#fa0";
-        audioPlayer.play();
-      } else {
-        playFallbackAudio(audioPlayer, statusDiv);
-        audioPlayer.style.display = "block";
-      }
-    }
-  } catch (err) {
-    playFallbackAudio(audioPlayer, statusDiv);
-    audioPlayer.style.display = "block";
-  }
-});
-
-// --- Conversational Chat Section (Day 10) ---
-let convoRecorder;
-let convoAudioChunks = [];
-const convoStartBtn = document.getElementById("convo-start-recording");
-const convoStopBtn = document.getElementById("convo-stop-recording");
-const convoAudioPlayer = document.getElementById("convo-audio-player");
-const convoStatus = document.getElementById("convo-status");
-const convoBotTextOutput = document.getElementById("convo-bot-text-output");
-
-function startConvoRecording() {
-  convoStatus.textContent = "Recording (conversation)...";
-  convoStatus.style.color = "#fff";
-  convoAudioPlayer.style.display = "none";
-  convoBotTextOutput.textContent = "";
-  convoAudioChunks = [];
-  convoStopBtn.disabled = false;
-  convoStartBtn.disabled = true;
-
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
     convoRecorder = new MediaRecorder(stream);
     convoRecorder.ondataavailable = (e) => {
       convoAudioChunks.push(e.data);
@@ -473,64 +102,87 @@ function startConvoRecording() {
       const audioBlob = new Blob(convoAudioChunks, { type: "audio/webm" });
       const formData = new FormData();
       formData.append("audio", audioBlob, "convo-recording.webm");
-      convoStatus.textContent = "Sending to bot...";
-      convoStatus.style.color = "#fff";
+      statusDiv.textContent = "Sending to bot...";
+      statusDiv.style.color = "#fff";
       fetch(`/agent/chat/${sessionId}`, { method: "POST", body: formData })
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            convoStatus.textContent = "Bot responding...";
-            convoBotTextOutput.textContent = data.response || "";
+            statusDiv.textContent = "Bot responding...";
+            botOutput.textContent = data.response || "";
             if (data.audio_urls && data.audio_urls.length) {
-              playAudioPlaylist(data.audio_urls, convoAudioPlayer, convoStatus, () => {
-                setTimeout(() => startConvoRecording(), 1000);
+              playAudioPlaylist(data.audio_urls, audioPlayer, statusDiv, () => {
+                updateUI(false);
               });
             } else if (data.audio_url) {
-              convoAudioPlayer.src = data.audio_url;
-              convoAudioPlayer.style.display = "block";
-              convoAudioPlayer.onended = () => {
-                setTimeout(() => startConvoRecording(), 1000);
+              audioPlayer.src = data.audio_url;
+              audioPlayer.style.display = "none";
+              audioPlayer.onended = () => {
+                updateUI(false);
               };
-              convoAudioPlayer.play();
+              audioPlayer.play();
+            } else {
+              statusDiv.textContent = "No audio returned.";
+              statusDiv.style.color = "#ff4d4f";
+              updateUI(false);
             }
           } else {
-            // Fallback audio if provided or local fallback
             if (data.audio_url) {
-              convoAudioPlayer.src = data.audio_url;
-              convoAudioPlayer.style.display = "block";
-              convoStatus.textContent = "Playing fallback audio.";
-              convoStatus.style.color = "#fa0";
-              convoAudioPlayer.play();
+              audioPlayer.src = data.audio_url;
+              audioPlayer.style.display = "none";
+              statusDiv.textContent = "Playing fallback audio.";
+              statusDiv.style.color = "#fa0";
+              audioPlayer.play();
             } else {
-              playFallbackAudio(convoAudioPlayer, convoStatus);
-              convoAudioPlayer.style.display = "block";
+              playFallbackAudio(audioPlayer, statusDiv);
             }
-            convoStartBtn.disabled = false;
-            convoStopBtn.disabled = true;
+            updateUI(false);
           }
         })
         .catch(() => {
-          playFallbackAudio(convoAudioPlayer, convoStatus);
-          convoAudioPlayer.style.display = "block";
-          convoStartBtn.disabled = false;
-          convoStopBtn.disabled = true;
+          playFallbackAudio(audioPlayer, statusDiv);
+          updateUI(false);
         });
     };
     convoRecorder.start();
-  }).catch(() => {
-    convoStatus.textContent = "Mic access denied.";
-    convoStatus.style.color = "#ff4d4f";
-    convoStartBtn.disabled = false;
-    convoStopBtn.disabled = true;
-  });
+  } catch (e) {
+    statusDiv.textContent = "Mic access denied.";
+    statusDiv.style.color = "#ff4d4f";
+    updateUI(false);
+  }
 }
 
-convoStartBtn?.addEventListener("click", startConvoRecording);
-
-convoStopBtn?.addEventListener("click", () => {
+function stopConvoRecording() {
   if (convoRecorder && convoRecorder.state === "recording") {
     convoRecorder.stop();
-    convoStopBtn.disabled = true;
-    convoStartBtn.disabled = false;
+    updateUI(false);
+  }
+}
+
+function updateUI(recording) {
+  isRecording = !!recording;
+  if (isRecording) {
+    recordBtn.textContent = "Stop Recording";
+    recordBtn.classList.add("recording");
+    recordingIndicator.style.display = "";
+    statusDiv.textContent = "Recording...";
+    statusDiv.style.color = "#0ff";
+  } else {
+    recordBtn.textContent = "Start Recording";
+    recordBtn.classList.remove("recording");
+    recordingIndicator.style.display = "none";
+    if (!statusDiv.textContent.includes("Bot")) statusDiv.textContent = "";
+    statusDiv.style.color = "#fff";
+  }
+}
+
+recordBtn?.addEventListener("click", () => {
+  if (!isRecording) {
+    startConvoRecording();
+  } else {
+    stopConvoRecording();
   }
 });
+
+// Optional: Immediately update button to correct state on load
+updateUI(false);

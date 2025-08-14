@@ -22,66 +22,14 @@
     <h1>Voice Agent <span>-by Shan</span></h1>
     <p class="subtitle">Conversational LLM Voice Agent with Memory</p>
 
-    <!-- TTS Classic -->
-    <input type="text" id="input-box" placeholder="Type your message here..." />
-    <button id="generate-btn">Generate Speech</button>
-    <div id="audio-container" style="display:none;">
-      <audio controls id="audio-player"></audio>
-    </div>
-    <div id="status"></div>
-
-    <!-- Echo Bot Section -->
-    <h2>Echo Bot (Audio → Murf)</h2>
-    <div id="echo-bot-section">
-      <button id="start-recording">Start Recording</button>
-      <button id="stop-recording" disabled>Stop Recording</button>
-      <audio id="audio-playback" controls style="display:none"></audio>
-      <p id="recording-status"></p>
-      <div id="transcript-section" style="margin-top:18px;">
-        <h3 style="color:#fff;margin-bottom:6px;">Transcript:</h3>
-        <div id="transcript-output" style="color:#0ff; font-size:1.05rem; min-height:32px;"></div>
-      </div>
-    </div>
-
-    <!-- LLM Query via Audio -->
-    <h2>Ask LLM via Audio</h2>
-    <div id="llm-audio-query-section">
-      <button id="llm-audio-query-btn" disabled>Query LLM with Last Recording</button>
-      <p id="llm-audio-query-status"></p>
-      <audio id="llm-audio-player" controls style="display:none"></audio>
-      <div style="margin-top:10px;">
-        <strong>Transcript:</strong>
-        <span id="llm-transcript-output" style="color:#0ff;"></span>
-        <span style="color:#ccc; font-size:0.9rem;"> (<span id="llm-transcript-count">0</span> chars)</span>
-      </div>
-      <input type="hidden" id="llm-transcript-hidden" value="" />
-      <div style="margin-top:10px;">
-        <strong>LLM Response:</strong>
-        <span id="llm-text-output" style="color:#fff;"></span>
-      </div>
-    </div>
-
-    <!-- LLM Query via Text -->
-    <h2>Ask LLM via Text</h2>
-    <input type="text" id="llm-input-box" placeholder="Type your question for LLM..." />
-    <button id="llm-text-query-btn">Query LLM (Text)</button>
-    <p id="llm-text-query-status"></p>
-    <audio id="llm-text-audio-player" controls style="display:none"></audio>
-    <div style="margin-top:10px;">
-      <strong>Transcript:</strong>
-      <span id="llm-text-transcript-output" style="color:#0ff;"></span>
-    </div>
-    <div style="margin-top:10px;">
-      <strong>LLM Response:</strong>
-      <span id="llm-text-output2" style="color:#fff;"></span>
-    </div>
-
-    <!-- Conversational Bot Section (Day 10) -->
+    <!-- Conversational Bot Section (Day 12) -->
     <h2>Conversational Bot</h2>
     <div id="convo-bot-section">
-      <button id="convo-start-recording">Start Conversation</button>
-      <button id="convo-stop-recording" disabled>Stop</button>
-      <audio id="convo-audio-player" controls style="display:none"></audio>
+      <button id="convo-record-btn" class="record-btn">Start Recording</button>
+      <div id="recording-indicator" style="display:none;">
+        <span class="dot"></span> Recording...
+      </div>
+      <audio id="convo-audio-player" style="display:none"></audio>
       <div id="convo-status"></div>
       <div style="margin-top:10px;">
         <strong>Bot Response:</strong>
