@@ -1,22 +1,23 @@
 import os
 import io
+import logging
 from typing import List, Dict
-from fastapi import FastAPI, UploadFile, File, Request
+from fastapi import FastAPI, UploadFile, File, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from dotenv import load_dotenv
-from murf import Murf
-import assemblyai as aai
 from threading import Lock
 
-# Gemini API
-try:
-    from google.generativeai import GenerativeModel, configure
-except ImportError:
-    GenerativeModel = None
-    configure = None
+from schemas.tts import TTSRequest, TTSResponse
+from schemas.llm import LLMQueryRequest, LLMQueryResponse
+from services.tts_service import murf_tts, murf_tts_chunked, get_fallback_audio
+from services.stt_service import transcribe_audio
+from services.llm_service import query_llm
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -38,134 +39,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- Config / Constants ----------
-MURF_API_KEY = os.getenv("MURF_API_KEY")
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MAX_LLM_LEN = 3000
-MAX_MURF_LEN = 3000
-
-# ---------- Models ----------
-class TTSRequest(BaseModel):
-    text: str
-    voice_id: str = "en-US-natalie"
-    style: str = "Promo"
-
-class LLMQueryRequest(BaseModel):
-    text: str | None = None
-
-# ---------- Utilities ----------
-def sanitize_text(s: str) -> str:
-    if not isinstance(s, str):
-        s = str(s)
-    s = s.replace("\r", " ").replace("\n", " ")
-    s = " ".join(s.split())
-    return s.strip()
-
-def clamp_text(s: str, max_len: int) -> str:
-    return s if len(s) <= max_len else s[:max_len]
-
-def split_into_chunks(text: str, max_len: int) -> List[str]:
-    text = text.strip()
-    if len(text) <= max_len:
-        return [text]
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + max_len, len(text))
-        if end < len(text):
-            space = text.rfind(" ", start, end)
-            if space != -1 and space > start:
-                end = space
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        start = end
-    return chunks if chunks else [""]
-
-def murf_tts(text: str, voice_id: str = "en-US-natalie", style: str = "Promo") -> str:
-    client = Murf(api_key=MURF_API_KEY)
-    params = {
-        "text": text,
-        "voice_id": voice_id,
-        "format": "MP3",
-        "channel_type": "STEREO",
-        "sample_rate": 44100
-    }
-    if style:
-        params["style"] = style
-    res = client.text_to_speech.generate(**params)
-    return res.audio_file
-
-def murf_tts_chunked(text: str, voice_id: str = "en-US-natalie", style: str = "Promo") -> List[str]:
-    clean = sanitize_text(text)
-    parts = split_into_chunks(clean, MAX_MURF_LEN)
-    urls = []
-    for idx, part in enumerate(parts, start=1):
-        url = murf_tts(part, voice_id=voice_id, style=style)
-        urls.append(url)
-    return urls
-
-# ---------- Fallback Audio ----------
-def get_fallback_audio():
-    try:
-        # Try to generate fallback audio using Murf
-        return murf_tts("I'm having trouble connecting right now. Please try again later.", "en-US-natalie", "Promo")
-    except Exception:
-        # If Murf fails, just return None (client can handle a local fallback)
-        return None
-
 # ---------- Conversation History ----------
 chat_histories: Dict[str, List[Dict[str, str]]] = {}
 chat_histories_lock = Lock()
 
 # ---------- Endpoints ----------
-@app.post("/api/tts")
+@app.post("/api/tts", response_model=TTSResponse)
 async def generate_tts(request: TTSRequest):
     try:
-        clean_text = sanitize_text(request.text or "")
-        if not clean_text:
-            return {
-                "success": False,
-                "audio_url": None,
-                "audio_urls": [],
-                "message": "No text provided.",
-                "error": "EMPTY_TEXT"
-            }
-        if len(clean_text) > MAX_MURF_LEN:
-            urls = murf_tts_chunked(clean_text, request.voice_id, request.style)
-            return {
-                "success": True,
-                "audio_url": None,
-                "audio_urls": urls,
-                "message": f"Generated {len(urls)} audio segments via Murf.",
-                "error": None
-            }
-        else:
-            audio_url = murf_tts(clean_text, request.voice_id, request.style)
-            return {
-                "success": True,
-                "audio_url": audio_url,
-                "audio_urls": [],
-                "message": "Text-to-speech Conversion successful!",
-                "error": None
-            }
+        result = await murf_tts_chunked(request)
+        return result
     except Exception as e:
-        fallback_url = get_fallback_audio()
-        return {
-            "success": False,
-            "audio_url": fallback_url,
-            "audio_urls": [],
-            "message": "Text-to-speech Conversion failed! Playing fallback audio.",
-            "error": str(e)
-        }
+        logger.exception("TTS endpoint failed.")
+        return TTSResponse(
+            success=False,
+            audio_url=get_fallback_audio(),
+            audio_urls=[],
+            message="Text-to-speech Conversion failed! Playing fallback audio.",
+            error=str(e)
+        )
 
 @app.post("/api/upload-audio")
 async def upload_audio(audio: UploadFile = File(...)):
     try:
         file_location = os.path.join(UPLOAD_DIR, audio.filename)
+        content = await audio.read()
         with open(file_location, "wb") as f:
-            content = await audio.read()
             f.write(content)
         return {
             "name": audio.filename,
@@ -173,6 +72,7 @@ async def upload_audio(audio: UploadFile = File(...)):
             "size": len(content)
         }
     except Exception as e:
+        logger.exception("Audio upload failed.")
         fallback_url = get_fallback_audio()
         return {
             "success": False,
@@ -184,257 +84,84 @@ async def upload_audio(audio: UploadFile = File(...)):
 @app.post("/transcribe/file")
 async def transcribe_file(file: UploadFile = File(...)):
     try:
-        audio_bytes = await file.read()
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(io.BytesIO(audio_bytes))
-        text = sanitize_text(transcript.text or "")
+        text = await transcribe_audio(file)
         return {"transcript": text, "success": True}
     except Exception as e:
+        logger.exception("Transcription failed.")
         fallback_url = get_fallback_audio()
         return {"transcript": "", "success": False, "error": str(e), "audio_url": fallback_url}
 
-@app.post("/tts/echo")
+@app.post("/tts/echo", response_model=TTSResponse)
 async def echo_bot(audio: UploadFile = File(...)):
     try:
-        audio_bytes = await audio.read()
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(io.BytesIO(audio_bytes))
-        transcript_text = sanitize_text(transcript.text or "")
-        urls = murf_tts_chunked(transcript_text, "en-US-natalie", "Promo")
-        return JSONResponse(content={
-            "success": True,
-            "audio_url": urls[0] if len(urls) == 1 else None,
-            "audio_urls": urls if len(urls) > 1 else [],
-            "transcript": transcript_text,
-            "message": "Echo bot Murf TTS generated!"
-        })
+        transcript = await transcribe_audio(audio)
+        tts_req = TTSRequest(text=transcript)
+        result = await murf_tts_chunked(tts_req)
+        result.transcript = transcript
+        result.message = "Echo bot Murf TTS generated!"
+        return result
     except Exception as e:
+        logger.exception("Echo bot failed.")
         fallback_url = get_fallback_audio()
-        return JSONResponse(content={
-            "success": False,
-            "audio_url": fallback_url,
-            "audio_urls": [],
-            "transcript": "",
-            "message": "Echo bot failed. Playing fallback audio.",
-            "error": str(e)
-        })
+        return TTSResponse(
+            success=False,
+            audio_url=fallback_url,
+            audio_urls=[],
+            message="Echo bot failed. Playing fallback audio.",
+            error=str(e)
+        )
 
-@app.post("/llm/query")
-async def llm_query(request: Request):
+@app.post("/llm/query", response_model=LLMQueryResponse)
+async def llm_query(request: LLMQueryRequest):
     try:
-        body = await request.json()
-        raw_text = body.get("text", "")
-        text = sanitize_text(raw_text)
-        received_len = len(text)
-        if not text:
-            return JSONResponse(content={
-                "success": False,
-                "response": "",
-                "audio_url": None,
-                "audio_urls": [],
-                "transcript": "",
-                "error": "No text provided for LLM query."
-            })
-        clamped_text = clamp_text(text, MAX_LLM_LEN)
-        print(f"[LLM QUERY] Received length={received_len}, sending length={len(clamped_text)}")
-        if GenerativeModel is None or configure is None or not GEMINI_API_KEY:
-            fallback_url = get_fallback_audio()
-            return JSONResponse(content={
-                "success": False,
-                "response": "",
-                "audio_url": fallback_url,
-                "audio_urls": [],
-                "transcript": clamped_text,
-                "error": "Gemini API not available. Playing fallback audio."
-            })
-        configure(api_key=GEMINI_API_KEY)
-        model = GenerativeModel("gemini-2.5-pro")
-        chat = model.start_chat(history=[])
-        try:
-            gemini_response = chat.send_message(clamped_text)
-            llm_text = ""
-            if hasattr(gemini_response, "text") and gemini_response.text:
-                llm_text = gemini_response.text
-            elif hasattr(gemini_response, "candidates") and gemini_response.candidates:
-                candidate = gemini_response.candidates[0]
-                content = getattr(candidate, "content", None)
-                if content and getattr(content, "parts", None):
-                    part0 = content.parts[0]
-                    llm_text = getattr(part0, "text", "") or getattr(part0, "data", "") or ""
-            else:
-                llm_text = str(gemini_response)
-            llm_text = sanitize_text(llm_text)
-            if not llm_text:
-                fallback_url = get_fallback_audio()
-                return JSONResponse(content={
-                    "success": False,
-                    "response": "",
-                    "audio_url": fallback_url,
-                    "audio_urls": [],
-                    "transcript": clamped_text,
-                    "error": "LLM did not produce a response. Playing fallback audio."
-                })
-        except Exception as e:
-            fallback_url = get_fallback_audio()
-            return JSONResponse(content={
-                "success": False,
-                "response": "",
-                "audio_url": fallback_url,
-                "audio_urls": [],
-                "transcript": clamped_text,
-                "error": f"LLM query failed: {e}. Playing fallback audio."
-            })
-        try:
-            if len(llm_text) > MAX_MURF_LEN:
-                urls = murf_tts_chunked(llm_text, "en-US-natalie", "Promo")
-                return JSONResponse(content={
-                    "success": True,
-                    "response": llm_text,
-                    "audio_url": None,
-                    "audio_urls": urls,
-                    "transcript": clamped_text,
-                    "error": None
-                })
-            else:
-                audio_url = murf_tts(llm_text, "en-US-natalie", "Promo")
-                return JSONResponse(content={
-                    "success": True,
-                    "response": llm_text,
-                    "audio_url": audio_url,
-                    "audio_urls": [],
-                    "transcript": clamped_text,
-                    "error": None
-                })
-        except Exception as e:
-            fallback_url = get_fallback_audio()
-            return JSONResponse(content={
-                "success": True,
-                "response": llm_text,
-                "audio_url": fallback_url,
-                "audio_urls": [],
-                "transcript": clamped_text,
-                "error": f"TTS failed: {e}. Playing fallback audio."
-            })
+        response = await query_llm(request)
+        return response
     except Exception as e:
+        logger.exception("LLM query failed.")
         fallback_url = get_fallback_audio()
-        return JSONResponse(content={
-            "success": False,
-            "response": "",
-            "audio_url": fallback_url,
-            "audio_urls": [],
-            "transcript": "",
-            "error": str(e)
-        })
+        return LLMQueryResponse(
+            success=False,
+            response="",
+            audio_url=fallback_url,
+            audio_urls=[],
+            transcript=request.text or "",
+            error=str(e)
+        )
 
-# ---------- Day 10: Conversational Chat Endpoint ----------
-@app.post("/agent/chat/{session_id}")
+@app.post("/agent/chat/{session_id}", response_model=LLMQueryResponse)
 async def agent_chat(session_id: str, audio: UploadFile = File(...)):
     try:
-        # 1. STT
-        audio_bytes = await audio.read()
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(io.BytesIO(audio_bytes))
-        user_text = sanitize_text(transcript.text or "")
-
-        if not user_text:
+        transcript = await transcribe_audio(audio)
+        if not transcript:
             fallback_url = get_fallback_audio()
-            return JSONResponse(content={
-                "success": False,
-                "audio_url": fallback_url,
-                "error": "No transcript from audio. Playing fallback audio."
-            })
+            return LLMQueryResponse(
+                success=False,
+                audio_url=fallback_url,
+                error="No transcript from audio. Playing fallback audio."
+            )
 
-        # 2. Get/Create chat history for session
         with chat_histories_lock:
             history = chat_histories.get(session_id, [])
+        history.append({"role": "user", "content": transcript})
 
-        # 3. Append user message
-        history.append({"role": "user", "content": user_text})
+        # Prepare chat history for LLM
+        from services.llm_service import format_history_for_gemini
+        gemini_history = format_history_for_gemini(history)
 
-        # 4. Prepare Gemini format
-        gemini_history = [
-            {"role": msg["role"], "parts": [msg["content"]]}
-            for msg in history
-        ]
+        response = await query_llm(LLMQueryRequest(text=transcript), history=gemini_history)
 
-        # 5. LLM response
-        if GenerativeModel is None or configure is None or not GEMINI_API_KEY:
-            fallback_url = get_fallback_audio()
-            return JSONResponse(content={
-                "success": False,
-                "audio_url": fallback_url,
-                "error": "Gemini API not available. Playing fallback audio."
-            })
-        configure(api_key=GEMINI_API_KEY)
-        model = GenerativeModel("gemini-2.5-pro")
-        chat = model.start_chat(history=gemini_history)
-
-        try:
-            gemini_response = chat.send_message(user_text)
-            llm_text = ""
-            if hasattr(gemini_response, "text") and gemini_response.text:
-                llm_text = gemini_response.text
-            elif hasattr(gemini_response, "candidates") and gemini_response.candidates:
-                candidate = gemini_response.candidates[0]
-                content = getattr(candidate, "content", None)
-                if content and getattr(content, "parts", None):
-                    part0 = content.parts[0]
-                    llm_text = getattr(part0, "text", "") or getattr(part0, "data", "") or ""
-            else:
-                llm_text = str(gemini_response)
-            llm_text = sanitize_text(llm_text)
-        except Exception as e:
-            fallback_url = get_fallback_audio()
-            return JSONResponse(content={
-                "success": False,
-                "audio_url": fallback_url,
-                "error": f"LLM query failed: {e}. Playing fallback audio."
-            })
-
-        # 6. Append LLM response to history
-        history.append({"role": "model", "content": llm_text})
-
-        # 7. Save updated history
+        # Append LLM response to history
+        history.append({"role": "model", "content": response.response or ""})
         with chat_histories_lock:
             chat_histories[session_id] = history
 
-        # 8. TTS
-        try:
-            if len(llm_text) > MAX_MURF_LEN:
-                urls = murf_tts_chunked(llm_text, "en-US-natalie", "Promo")
-                return JSONResponse(content={
-                    "success": True,
-                    "audio_url": None,
-                    "audio_urls": urls,
-                    "response": llm_text,
-                    "transcript": user_text,
-                })
-            else:
-                audio_url = murf_tts(llm_text, "en-US-natalie", "Promo")
-                return JSONResponse(content={
-                    "success": True,
-                    "audio_url": audio_url,
-                    "audio_urls": [],
-                    "response": llm_text,
-                    "transcript": user_text,
-                })
-        except Exception as e:
-            fallback_url = get_fallback_audio()
-            return JSONResponse(content={
-                "success": True,
-                "audio_url": fallback_url,
-                "audio_urls": [],
-                "response": llm_text,
-                "transcript": user_text,
-                "error": f"TTS failed: {e}. Playing fallback audio."
-            })
+        response.transcript = transcript
+        return response
     except Exception as e:
+        logger.exception("Agent chat failed")
         fallback_url = get_fallback_audio()
-        return JSONResponse(content={
-            "success": False,
-            "audio_url": fallback_url,
-            "error": str(e)
-        })
+        return LLMQueryResponse(
+            success=False,
+            audio_url=fallback_url,
+            error=str(e)
+        )
