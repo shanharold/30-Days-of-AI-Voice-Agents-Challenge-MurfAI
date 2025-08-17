@@ -43,9 +43,9 @@ function getSessionId() {
 }
 const sessionId = getSessionId();
 
-// --- Conversational Bot Section (Day 12 UI) ---
+// --- Conversational Bot Section (Day 16: Streaming Audio via WebSocket) ---
 let convoRecorder;
-let convoAudioChunks = [];
+let ws; // WebSocket instance for streaming
 const recordBtn = document.getElementById("convo-record-btn");
 const audioPlayer = document.getElementById("convo-audio-player");
 const statusDiv = document.getElementById("convo-status");
@@ -54,27 +54,7 @@ const recordingIndicator = document.getElementById("recording-indicator");
 
 let isRecording = false;
 
-function playAudioPlaylist(urls, player, statusEl, onFinish) {
-  if (!urls || !urls.length) return;
-  let idx = 0;
-
-  function playIndex(i) {
-    if (i >= urls.length) {
-      statusEl && (statusEl.textContent = "Playback finished.");
-      if (typeof onFinish === "function") onFinish();
-      return;
-    }
-    const url = urls[i];
-    player.src = url;
-    player.style.display = "none";
-    statusEl && (statusEl.textContent = `Playing segment ${i + 1}/${urls.length} ...`);
-    player.onended = () => playIndex(i + 1);
-    player.play().catch(() => {});
-  }
-
-  player.onended = null;
-  playIndex(idx);
-}
+// No playlist or TTS for Day 16 - just audio streaming
 
 function playFallbackAudio(player, statusEl) {
   player.src = "/static/fallback.mp3";
@@ -85,66 +65,60 @@ function playFallbackAudio(player, statusEl) {
 }
 
 async function startConvoRecording() {
-  statusDiv.textContent = "Recording (conversation)...";
+  statusDiv.textContent = "Recording (streaming audio)...";
   statusDiv.style.color = "#fff";
   audioPlayer.style.display = "none";
   botOutput.textContent = "";
-  convoAudioChunks = [];
   updateUI(true);
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    convoRecorder = new MediaRecorder(stream);
+    convoRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+
+    // Open WebSocket connection to /ws/stream
+    ws = new WebSocket("ws://localhost:8000/ws/stream");
+
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = () => {
+      statusDiv.textContent = "Recording and streaming audio to server...";
+      statusDiv.style.color = "#0ff";
+      convoRecorder.start(250); // Collect audio in 250ms chunks
+    };
+
+    ws.onerror = (e) => {
+      statusDiv.textContent = "WebSocket error!";
+      statusDiv.style.color = "#ff4d4f";
+      updateUI(false);
+      playFallbackAudio(audioPlayer, statusDiv);
+    };
+
+    ws.onclose = () => {
+      statusDiv.textContent = "WebSocket closed.";
+      statusDiv.style.color = "#fa0";
+      updateUI(false);
+    };
+
     convoRecorder.ondataavailable = (e) => {
-      convoAudioChunks.push(e.data);
-    };
-    convoRecorder.onstop = () => {
-      const audioBlob = new Blob(convoAudioChunks, { type: "audio/webm" });
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "convo-recording.webm");
-      statusDiv.textContent = "Sending to bot...";
-      statusDiv.style.color = "#fff";
-      fetch(`/agent/chat/${sessionId}`, { method: "POST", body: formData })
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            statusDiv.textContent = "Bot responding...";
-            botOutput.textContent = data.response || "";
-            if (data.audio_urls && data.audio_urls.length) {
-              playAudioPlaylist(data.audio_urls, audioPlayer, statusDiv, () => {
-                updateUI(false);
-              });
-            } else if (data.audio_url) {
-              audioPlayer.src = data.audio_url;
-              audioPlayer.style.display = "none";
-              audioPlayer.onended = () => {
-                updateUI(false);
-              };
-              audioPlayer.play();
-            } else {
-              statusDiv.textContent = "No audio returned.";
-              statusDiv.style.color = "#ff4d4f";
-              updateUI(false);
-            }
-          } else {
-            if (data.audio_url) {
-              audioPlayer.src = data.audio_url;
-              audioPlayer.style.display = "none";
-              statusDiv.textContent = "Playing fallback audio.";
-              statusDiv.style.color = "#fa0";
-              audioPlayer.play();
-            } else {
-              playFallbackAudio(audioPlayer, statusDiv);
-            }
-            updateUI(false);
-          }
-        })
-        .catch(() => {
-          playFallbackAudio(audioPlayer, statusDiv);
-          updateUI(false);
+      if (e.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
+        // Send audio chunk as ArrayBuffer
+        e.data.arrayBuffer().then(buffer => {
+          ws.send(buffer);
         });
+      }
     };
-    convoRecorder.start();
+
+    convoRecorder.onstop = () => {
+      // Tell server we're done (optional: you can skip this if not handled on backend)
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send("close"); // backend can ignore or use as a flag
+        ws.close();
+      }
+      statusDiv.textContent = "Recording stopped. Audio saved on server!";
+      statusDiv.style.color = "#0f0";
+      updateUI(false);
+    };
+
   } catch (e) {
     statusDiv.textContent = "Mic access denied.";
     statusDiv.style.color = "#ff4d4f";
@@ -155,6 +129,11 @@ async function startConvoRecording() {
 function stopConvoRecording() {
   if (convoRecorder && convoRecorder.state === "recording") {
     convoRecorder.stop();
+    // WebSocket will be closed in onstop
+  } else {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
     updateUI(false);
   }
 }
@@ -162,16 +141,16 @@ function stopConvoRecording() {
 function updateUI(recording) {
   isRecording = !!recording;
   if (isRecording) {
-    recordBtn.textContent = "Stop Recording";
+    recordBtn.textContent = "Stop Streaming";
     recordBtn.classList.add("recording");
     recordingIndicator.style.display = "";
-    statusDiv.textContent = "Recording...";
+    statusDiv.textContent = "Recording and streaming...";
     statusDiv.style.color = "#0ff";
   } else {
-    recordBtn.textContent = "Start Recording";
+    recordBtn.textContent = "Start Streaming";
     recordBtn.classList.remove("recording");
     recordingIndicator.style.display = "none";
-    if (!statusDiv.textContent.includes("Bot")) statusDiv.textContent = "";
+    if (!statusDiv.textContent.includes("saved")) statusDiv.textContent = "";
     statusDiv.style.color = "#fff";
   }
 }

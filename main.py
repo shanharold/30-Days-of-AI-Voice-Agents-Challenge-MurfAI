@@ -27,6 +27,10 @@ app.mount("/static", StaticFiles(directory="static", html=True), name="static")
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# NEW for Day 16: Directory for streamed audio
+STREAMED_AUDIO_DIR = "streamed_audio"
+os.makedirs(STREAMED_AUDIO_DIR, exist_ok=True)
+
 @app.get("/")
 def main():
     return FileResponse("static/index.html")
@@ -43,7 +47,7 @@ app.add_middleware(
 chat_histories: Dict[str, List[Dict[str, str]]] = {}
 chat_histories_lock = Lock()
 
-# ---------- WebSocket Endpoint ----------
+# ---------- WebSocket Endpoint: Echo (retained for reference) ----------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -53,6 +57,27 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_text(f"ECHO: {data}")
     except WebSocketDisconnect:
         logger.info("WebSocket connection closed")
+
+# ---------- NEW: WebSocket Audio Streaming Endpoint (Day 16) ----------
+@app.websocket("/ws/stream")
+async def websocket_audio_stream(websocket: WebSocket):
+    await websocket.accept()
+    # Simple: overwrite file each time; you can use session ID or timestamp for multiple files
+    filename = os.path.join(STREAMED_AUDIO_DIR, "audio_stream.webm")
+    with open(filename, "wb") as audio_file:
+        try:
+            while True:
+                data = await websocket.receive()
+                # Receive binary audio data (from MediaRecorder)
+                if "bytes" in data:
+                    audio_file.write(data["bytes"])
+                # Optionally handle text (e.g. "close")
+                elif "text" in data and data["text"] == "close":
+                    break
+        except WebSocketDisconnect:
+            logger.info("WebSocket streaming connection closed")
+        except Exception as e:
+            logger.error(f"WebSocket audio streaming error: {e}")
 
 # ---------- Endpoints ----------
 @app.post("/api/tts", response_model=TTSResponse)
@@ -160,7 +185,6 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
 
         response = await query_llm(LLMQueryRequest(text=transcript), history=gemini_history)
 
-        # Append LLM response to history
         history.append({"role": "model", "content": response.response or ""})
         with chat_histories_lock:
             chat_histories[session_id] = history
