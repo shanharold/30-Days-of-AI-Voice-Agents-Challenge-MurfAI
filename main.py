@@ -2,9 +2,9 @@ import os
 import io
 import logging
 from typing import List, Dict
-from fastapi import FastAPI, UploadFile, File, Request, Depends
+from fastapi import FastAPI, UploadFile, File, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from threading import Lock
@@ -13,7 +13,7 @@ from schemas.tts import TTSRequest, TTSResponse
 from schemas.llm import LLMQueryRequest, LLMQueryResponse
 from services.tts_service import murf_tts, murf_tts_chunked, get_fallback_audio
 from services.stt_service import transcribe_audio
-from services.llm_service import query_llm
+from services.llm_service import query_llm, format_history_for_gemini
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +42,17 @@ app.add_middleware(
 # ---------- Conversation History ----------
 chat_histories: Dict[str, List[Dict[str, str]]] = {}
 chat_histories_lock = Lock()
+
+# ---------- WebSocket Endpoint ----------
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"ECHO: {data}")
+    except WebSocketDisconnect:
+        logger.info("WebSocket connection closed")
 
 # ---------- Endpoints ----------
 @app.post("/api/tts", response_model=TTSResponse)
@@ -145,7 +156,6 @@ async def agent_chat(session_id: str, audio: UploadFile = File(...)):
         history.append({"role": "user", "content": transcript})
 
         # Prepare chat history for LLM
-        from services.llm_service import format_history_for_gemini
         gemini_history = format_history_for_gemini(history)
 
         response = await query_llm(LLMQueryRequest(text=transcript), history=gemini_history)
